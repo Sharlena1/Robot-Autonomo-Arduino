@@ -1,0 +1,1645 @@
+ 
+/*  
+ *  Vehiculo Siguelineas
+*/
+
+#include <Servo.h>
+
+// Nombre servo
+Servo direccion;
+
+// Direccion de Giro del motor (Hacia delante o hacia detras)
+#define motor_adelante 11         //Motor giro delante IN1.
+#define motor_detras 3            //Motor giro detras IN2.
+
+//Expansor de entradas/salida
+#define direccion_POS0 4          //Posición de las expansiones A0 y A
+#define direccion_POS1 5          //Posición de las expansiones A1 y B
+#define direccion_POS2 6          //Posición de las expansiones A2 y C
+#define estado_salida 2           //Estado del dato de salida
+#define pulso_expansion_salidas 7 //Pin para enviar el pulso del expansor de salida
+#define dato_entrada 9            //Estado de la entrada solicitada
+
+//Sensor Ultrasonido
+#define trigger 12
+#define echo 13
+
+//Bus expansion entradas (sensores IR)
+//Senso Infrarrojos laterales
+#define sensor_lateral_DER 6
+#define sensor_lateral_IZQ 7
+//Sensores Infrarrojos suelo
+#define sensor_suelo_1 0
+#define sensor_suelo_2 1
+#define sensor_suelo_3 2
+#define sensor_suelo_4 3
+#define sensor_suelo_5 4
+#define sensor_suelo_6 5
+
+//Bus de expansion de salida (luces)
+#define luces_marcha_alante 0     //Salida del bus de expansion de las luces delanteras
+#define luces_marcha_atras 1      //Salida del bus de expansion de las luces delanteras
+#define luces_intermitente_IZQ 2  //Salida del bus de expansion de las luces delanteras
+#define luces_intermitente_DER 3  //Salida del bus de expansion de las luces delanteras
+#define luces_frenado 4           //Salida del bus de expansion de las luces delanteras
+
+//Angulos de giro
+#define giro_MAX_IZQ 60
+#define giro_MAX_DER 120
+
+#define giro_1 60
+#define giro_2 70
+#define giro_3 80
+#define giro_4 90
+#define giro_5 100
+#define giro_6 110
+#define giro_7 120
+
+float obstaculo_sensor_frontal = 0;         // Distancia del obstaculo central
+bool obstaculo_sensor_lateral_DER = 0;      // Obstaculo derecha
+bool obstaculo_sensor_lateral_IZQ = 0;      // Obstaculo izquierda
+
+bool linea_sensor_suelo_1 = 0;
+bool linea_sensor_suelo_2 = 0;
+bool linea_sensor_suelo_3 = 0;
+bool linea_sensor_suelo_4 = 0;
+bool linea_sensor_suelo_5 = 0;
+bool linea_sensor_suelo_6 = 0;
+
+int velocidad_actual=0;                     // Velocidad actual del vehiculo
+int velocidad_anterior = velocidad_actual;
+int direccion_actual=90;                    // Giro actual del vehiculo
+
+byte contador_intermitentes = 50;           // Contador de duracion de los intermitentes
+
+byte contador_intermitente_IZQ = 50;        // Contador de duracion del intermitente IZQ
+byte contador_intermitente_DER = 50;        // Contador de duracion del intermitente DER
+
+int contador_seguridad_autonomo = 0;        // Contador para detectar si el coche se ha atascado
+
+int  memoria_siguelineas[20];               // Memoria de siguelineas
+byte posicion_memoria = 0;                  // Posicion de la memoria del siguelineas
+byte contador_seguridad_siguelineas = 0;
+
+char joystick;
+int posicion_joystick_X = 150;
+int posicion_joystick_Y = 150;
+bool estado_luces = LOW;
+bool estado_modo_autonomo = LOW;
+bool estado_modo_siguelineas = LOW;
+bool estado_modo_teledirigido = LOW;
+char lectura[20];
+String velocidad_leida;
+String giro_leido;
+char modo;
+
+
+
+void setup() {
+
+  //Configuración Servo
+  direccion.attach(10);
+  direccion.write(90);
+
+  pinMode(motor_adelante, OUTPUT);
+  pinMode(motor_detras, OUTPUT);
+  pinMode(direccion_POS0, OUTPUT);
+  pinMode(direccion_POS1, OUTPUT);
+  pinMode(direccion_POS2, OUTPUT);
+  pinMode(estado_salida, OUTPUT);
+  pinMode(pulso_expansion_salidas, OUTPUT);
+  pinMode(trigger, OUTPUT);
+  pinMode(echo, INPUT);
+  pinMode(dato_entrada, INPUT);
+
+  Serial.begin(9600);
+  
+}
+
+void loop() {
+
+  if(Serial.available()>0){
+    
+    lectura[Serial.readBytesUntil(",",lectura,sizeof(lectura)-1)]=0;
+    modo = lectura[0];
+    lectura[Serial.readBytesUntil(",",lectura,sizeof(lectura)-1)]=0;
+    velocidad_leida = lectura;
+    posicion_joystick_Y = velocidad_leida.toInt();
+    lectura[Serial.readBytesUntil(".",lectura,sizeof(lectura)-1)]=0;
+    giro_leido = lectura;
+    posicion_joystick_X = giro_leido.toInt();
+    
+
+    switch(modo){
+    case 'A':
+      estado_modo_autonomo = HIGH;
+      estado_modo_siguelineas = LOW;
+      estado_modo_teledirigido = LOW;
+      break;
+    case 'F':
+      estado_modo_autonomo = LOW;
+      estado_modo_siguelineas = HIGH;
+      estado_modo_teledirigido = LOW;
+      break;
+    case 'T':
+      estado_modo_autonomo = LOW;
+      estado_modo_siguelineas = LOW;
+      estado_modo_teledirigido = HIGH;
+      break;
+    case 'S':
+      estado_modo_autonomo = LOW;
+      estado_modo_siguelineas = LOW;
+      estado_modo_teledirigido = LOW;
+      break;
+    case 'L':
+      estado_luces = CHANGE;
+      break;
+    }
+  
+  }
+
+  if(estado_modo_autonomo == HIGH){
+
+    modo_autonomo();
+    
+  }
+
+  else if(estado_modo_siguelineas == HIGH){
+
+    modo_siguelineas();
+    
+  }
+
+  else if(estado_modo_teledirigido == HIGH){
+
+    modo_teledirigido();
+    
+  }
+
+  else{
+
+    if (estado_luces == HIGH){
+
+      cambiar_luces_marcha_alante(HIGH);
+      cambiar_luces_marcha_atras(HIGH);
+      cambiar_luces_intermitente_IZQ(HIGH);
+      cambiar_luces_intermitente_DER(HIGH);
+      cambiar_luces_frenado(HIGH);
+      
+      }
+
+    else{
+
+      cambiar_luces_marcha_alante(LOW);
+      cambiar_luces_marcha_atras(LOW);
+      cambiar_luces_intermitente_IZQ(LOW);
+      cambiar_luces_intermitente_DER(LOW);
+      cambiar_luces_frenado(LOW);
+    
+    }
+      
+  }
+
+}
+
+/*
+ * Funciones complejas: 
+ * -1. Modo autonomo
+ * -2. Modo siguelineas
+ * -3. Modo teledirigido
+ */
+ 
+/*
+ * 1.
+ * Modo autonomo, En este modo el equipo se desplazara de manera autonoma evitando obstaculos.
+ */
+
+void modo_autonomo(){
+  
+  leer_sensores_delanteros();
+
+  // Vehiculo no detecta obstaculos y se pone en marcha recto a maxima velocidad
+  if((obstaculo_sensor_frontal <= 30 && obstaculo_sensor_frontal > 20 && obstaculo_sensor_lateral_DER == 0 && obstaculo_sensor_lateral_IZQ == 0 && velocidad_actual > 0) || (obstaculo_sensor_frontal > 30 && velocidad_actual==0)){
+
+    cambiar_luces_marcha_alante(HIGH);
+    cambiar_luces_marcha_atras(LOW);
+    cambiar_luces_intermitente_IZQ(LOW);
+    cambiar_luces_intermitente_DER(LOW);
+    cambiar_luces_frenado(LOW);
+
+    contador_seguridad_autonomo = 0;
+    
+    direccion_actual=90;
+
+    while(velocidad_actual < 255 && obstaculo_sensor_frontal > 20 && obstaculo_sensor_lateral_DER == 0 && obstaculo_sensor_lateral_IZQ == 0){
+
+      velocidad_actual++;
+      movimiento_adelante(direccion_actual,velocidad_actual);
+      leer_sensores_delanteros();
+      
+    }
+
+    movimiento_adelante(direccion_actual,velocidad_actual);
+    
+  }
+
+  // Vehiculo da marcha atras y gira a una direccion al azar para cambiar de direccion y coger espacio termina parado
+  else if(obstaculo_sensor_frontal <= 30 && velocidad_actual == 0){
+    
+    cambiar_luces_marcha_alante(HIGH);
+    cambiar_luces_marcha_atras(HIGH);
+    cambiar_luces_intermitente_IZQ(LOW);
+    cambiar_luces_intermitente_DER(LOW);
+    cambiar_luces_frenado(LOW);
+    
+    direccion_actual = giro_aleatorio();
+    contador_seguridad_autonomo = 0;
+
+    while(obstaculo_sensor_frontal <= 30 && obstaculo_sensor_lateral_DER == 0 && obstaculo_sensor_lateral_IZQ == 0){
+
+      if(velocidad_actual < 127){
+        
+        velocidad_actual++;
+      }
+      
+      movimiento_atras(direccion_actual,velocidad_actual);
+      leer_sensores_delanteros();
+      }
+      
+    cambiar_luces_frenado(HIGH);
+
+    for(velocidad_actual;velocidad_actual>0;velocidad_actual--){
+      movimiento_atras(direccion_actual,velocidad_actual);
+    }
+    
+    movimiento_detenerse(direccion_actual);
+    
+  }
+
+  // Vehiculo detecta objeto frontal y frena hasta pararse
+  else if(obstaculo_sensor_frontal <= 20 && obstaculo_sensor_lateral_DER == 0 && obstaculo_sensor_lateral_IZQ == 0 && velocidad_actual > 0){
+
+    cambiar_luces_marcha_alante(HIGH);
+    cambiar_luces_marcha_atras(LOW);
+    cambiar_luces_intermitente_IZQ(LOW);
+    cambiar_luces_intermitente_DER(LOW);
+    cambiar_luces_frenado(HIGH);
+    
+    direccion_actual=90;
+
+    contador_seguridad_autonomo = 0;
+    
+    for(velocidad_actual;velocidad_actual>0;velocidad_actual--){
+      movimiento_adelante(direccion_actual,velocidad_actual);
+    }
+    
+    movimiento_detenerse(direccion_actual);
+    
+  }
+
+  // Vehiculo detecta obstaculo a le deracha por lo que decelerara y girara hacia la izquierda (Hay que hacer el parpadeo
+  else if(obstaculo_sensor_frontal > 20 && obstaculo_sensor_lateral_DER == 1 && obstaculo_sensor_lateral_IZQ == 0){
+
+    cambiar_luces_marcha_alante(HIGH);
+    cambiar_luces_marcha_atras(LOW);
+    cambiar_luces_intermitente_DER(LOW);
+    
+    contador_seguridad_autonomo = 0;
+
+    if (contador_intermitentes >= 50){
+      cambiar_luces_intermitente_IZQ(CHANGE);
+      contador_intermitentes = 0;
+    }
+    
+    if(velocidad_actual > 127){
+      cambiar_luces_frenado(HIGH);
+      for(velocidad_actual;velocidad_actual>127;velocidad_actual--){
+        movimiento_adelante(direccion_actual,velocidad_actual);
+      }
+      
+    }
+
+    cambiar_luces_frenado(LOW);
+    direccion_actual=giro_MAX_IZQ;
+    contador_intermitentes++;
+
+    if(velocidad_actual <  127){
+      for(velocidad_actual;velocidad_actual<127;velocidad_actual++){
+        movimiento_adelante(direccion_actual,velocidad_actual);
+        contador_intermitentes++;
+      }
+    }
+    
+    movimiento_adelante(direccion_actual,velocidad_actual);  
+    delay(10);
+    
+  }
+
+  // Vehiculo detecta obstaculo a la izquierda por lo que decelerara y girara hacia la derecha (Hay que hacer el parpadeo
+  else if(obstaculo_sensor_frontal > 20 && obstaculo_sensor_lateral_DER == 0 && obstaculo_sensor_lateral_IZQ == 1){
+    
+    cambiar_luces_marcha_alante(HIGH);
+    cambiar_luces_marcha_atras(LOW);
+    cambiar_luces_intermitente_IZQ(LOW);
+
+    contador_seguridad_autonomo = 0;
+    
+    if (contador_intermitentes >= 50){
+      cambiar_luces_intermitente_DER(CHANGE);
+      contador_intermitentes = 0;
+    }
+    
+    if(velocidad_actual > 127){
+      cambiar_luces_frenado(HIGH);
+      for(velocidad_actual;velocidad_actual>127;velocidad_actual--){
+        movimiento_adelante(direccion_actual,velocidad_actual);
+      }
+      
+    }
+
+    cambiar_luces_frenado(LOW);
+    direccion_actual=giro_MAX_DER;
+    contador_intermitentes++;
+
+    if(velocidad_actual <  127){
+      for(velocidad_actual;velocidad_actual<127;velocidad_actual++){
+        movimiento_adelante(direccion_actual,velocidad_actual);
+      }
+    }
+    
+    movimiento_adelante(direccion_actual,velocidad_actual);    
+    delay(10);
+
+  }
+
+  // Vehiculo detecta obstaculo a ambos lados decelera y al rato sale marcha atras si sigue encerrado, si no consigue salir se detiene y pone luces de alarma
+  else if(obstaculo_sensor_frontal > 20 && obstaculo_sensor_lateral_DER == 1 && obstaculo_sensor_lateral_IZQ == 1){
+
+    cambiar_luces_marcha_alante(HIGH);
+    cambiar_luces_marcha_atras(LOW);
+    cambiar_luces_intermitente_IZQ(LOW);
+    cambiar_luces_intermitente_DER(LOW);
+
+    contador_seguridad_autonomo = 0;
+
+    while(obstaculo_sensor_frontal <= 20 && obstaculo_sensor_lateral_DER == 0 && obstaculo_sensor_lateral_IZQ == 0 && contador_seguridad_autonomo < 500){
+      if(velocidad_actual>127){
+        cambiar_luces_frenado(HIGH);
+        velocidad_actual--;
+        movimiento_adelante(direccion_actual,velocidad_actual);
+        leer_sensores_delanteros();
+        contador_seguridad_autonomo += 1;
+      }
+
+      else if(velocidad_actual<127){
+        cambiar_luces_frenado(LOW);
+        velocidad_actual++;
+        movimiento_adelante(direccion_actual,velocidad_actual);
+        leer_sensores_delanteros();
+        contador_seguridad_autonomo += 1;
+      }
+
+      else{
+        cambiar_luces_frenado(LOW);
+        movimiento_adelante(direccion_actual,velocidad_actual);
+        leer_sensores_delanteros();
+        contador_seguridad_autonomo += 1;
+      }
+    }
+
+    if (contador_seguridad_autonomo == 500){
+
+      contador_seguridad_autonomo += 200;
+  
+      for(velocidad_actual;velocidad_actual>0;velocidad_actual--){
+        cambiar_luces_frenado(HIGH);
+        movimiento_adelante(direccion_actual,velocidad_actual);
+      }
+
+      movimiento_detenerse(90);
+    
+      for(velocidad_actual;velocidad_actual<=127;velocidad_actual++){
+
+        cambiar_luces_frenado(LOW);
+        cambiar_luces_marcha_atras(HIGH);
+        movimiento_atras(direccion_actual,velocidad_actual);
+
+      }
+
+      while(contador_seguridad_autonomo > 0){
+
+        movimiento_atras(direccion_actual,velocidad_actual);
+        contador_seguridad_autonomo -= 1;
+      
+      }
+    
+    }
+  
+    if (contador_seguridad_autonomo == 0 && obstaculo_sensor_lateral_DER == 1 && obstaculo_sensor_lateral_IZQ == 1){
+
+      do{
+        movimiento_detenerse(direccion_actual);
+        luces_alarma();
+      }while(obstaculo_sensor_frontal > 30 && obstaculo_sensor_lateral_DER == 0 && obstaculo_sensor_lateral_IZQ == 0);
+    
+    }
+
+    else {
+
+      if(obstaculo_sensor_lateral_DER == 0){
+        direccion_actual = giro_MAX_IZQ;
+      }
+
+      else{
+        direccion_actual = giro_MAX_DER;
+      }
+      cambiar_luces_frenado(HIGH);
+
+      for(velocidad_actual;velocidad_actual>0;velocidad_actual--){
+        movimiento_atras(direccion_actual,velocidad_actual);
+      }
+    
+      movimiento_detenerse(direccion_actual);
+    }
+  
+  }
+  // Sensores detectan obstaculo frontal y a la derecha, el vehiculo maniobrara hacia la izquierda
+  else if(obstaculo_sensor_frontal <= 20 && obstaculo_sensor_lateral_DER == 1 && obstaculo_sensor_lateral_IZQ == 0){
+
+    cambiar_luces_marcha_alante(HIGH);
+    cambiar_luces_marcha_atras(LOW);
+    cambiar_luces_intermitente_IZQ(HIGH);
+    cambiar_luces_intermitente_DER(LOW);
+
+    direccion_actual = giro_MAX_IZQ;
+
+    contador_intermitentes = 0;
+    contador_seguridad_autonomo = 0;
+    
+    for(velocidad_actual;velocidad_actual>0;velocidad_actual--){
+      cambiar_luces_frenado(HIGH);
+      movimiento_adelante(direccion_actual,velocidad_actual);
+      contador_intermitentes++;
+    }
+    
+    movimiento_detenerse(direccion_actual);
+    cambiar_luces_frenado(LOW);
+    direccion_actual = giro_MAX_DER;
+    
+    for(velocidad_actual;velocidad_actual<127;velocidad_actual++){
+      movimiento_atras(direccion_actual,velocidad_actual);
+      contador_intermitentes++;
+    }
+    
+    for(velocidad_actual;velocidad_actual<127;velocidad_actual++){
+      cambiar_luces_marcha_atras(HIGH);
+      movimiento_atras(direccion_actual,velocidad_actual);
+      contador_intermitentes++;
+    }
+    
+    for(velocidad_actual;velocidad_actual>0;velocidad_actual--){
+      cambiar_luces_frenado(HIGH);
+      movimiento_atras(direccion_actual,velocidad_actual);
+      contador_intermitentes++;
+    }
+
+    movimiento_detenerse(direccion_actual);
+    cambiar_luces_frenado(LOW);
+    cambiar_luces_marcha_atras(LOW);
+    direccion_actual = giro_MAX_IZQ;
+    contador_intermitentes = contador_intermitentes/10;
+    
+    while(obstaculo_sensor_frontal <= 20 && obstaculo_sensor_lateral_IZQ == 0){
+
+      for(velocidad_actual;velocidad_actual<127;velocidad_actual++){
+        movimiento_adelante(direccion_actual,velocidad_actual);
+        contador_intermitentes++;
+        }
+
+      movimiento_adelante(direccion_actual,velocidad_actual);
+      contador_intermitentes += 1;
+      leer_sensores_delanteros();
+      delay(10);
+        
+      if (contador_intermitentes >= 50){
+        cambiar_luces_intermitente_IZQ(CHANGE);
+        contador_intermitentes = 0;
+        }
+
+    }
+    
+  }
+
+  // Sensores detectan obstaculo frontal y a la izquierda, el vehiculo maniobrara hacia la derecha
+  else if(obstaculo_sensor_frontal <= 20 && obstaculo_sensor_lateral_DER == 0 && obstaculo_sensor_lateral_IZQ == 1){
+
+    cambiar_luces_marcha_alante(HIGH);
+    cambiar_luces_marcha_atras(LOW);
+    cambiar_luces_intermitente_IZQ(LOW);
+    cambiar_luces_intermitente_DER(HIGH);
+
+    direccion_actual = giro_MAX_DER;
+
+    contador_intermitentes = 0;
+    contador_seguridad_autonomo = 0;
+    
+    for(velocidad_actual;velocidad_actual>0;velocidad_actual--){
+      cambiar_luces_frenado(HIGH);
+      movimiento_adelante(direccion_actual,velocidad_actual);
+      contador_intermitentes++;
+    }
+    
+    movimiento_detenerse(direccion_actual);
+    cambiar_luces_frenado(LOW);
+    direccion_actual = giro_MAX_IZQ;
+    
+    for(velocidad_actual;velocidad_actual<127;velocidad_actual++){
+      cambiar_luces_marcha_atras(HIGH);
+      movimiento_atras(direccion_actual,velocidad_actual);
+      contador_intermitentes++;
+    }
+    
+    for(velocidad_actual;velocidad_actual>0;velocidad_actual--){
+      cambiar_luces_frenado(HIGH);
+      movimiento_atras(direccion_actual,velocidad_actual);
+      contador_intermitentes++;
+    }
+
+    movimiento_detenerse(direccion_actual);
+    cambiar_luces_frenado(LOW);
+    cambiar_luces_marcha_atras(LOW);
+    direccion_actual = giro_MAX_DER;
+    contador_intermitentes = contador_intermitentes/10;
+    
+    while(obstaculo_sensor_frontal <= 20 || obstaculo_sensor_lateral_DER==1){
+
+        for(velocidad_actual;velocidad_actual<127;velocidad_actual++){
+          movimiento_adelante(direccion_actual,velocidad_actual);
+          contador_intermitentes++;
+        }
+
+        movimiento_adelante(direccion_actual,velocidad_actual);
+        contador_intermitentes += 1;
+        leer_sensores_delanteros();
+        delay(10);
+        
+        if (contador_intermitentes >= 50){
+          cambiar_luces_intermitente_DER(CHANGE);
+          contador_intermitentes = 0;
+        }
+
+    }
+    
+  }
+
+  else if(obstaculo_sensor_frontal <= 20 && obstaculo_sensor_lateral_DER == 1 && obstaculo_sensor_lateral_IZQ == 1){
+
+    
+  }
+
+}
+
+/*
+ * 2.
+ * Modo Siguelineas, en este modo el vehiculo sera capaz de seguir una linea de manera autonoma y sin salirse.
+ */
+
+void modo_siguelineas(){
+
+  leer_sensores_suelo();
+
+  if(linea_sensor_suelo_1 == 0 && linea_sensor_suelo_2 == 0 && linea_sensor_suelo_3 == 0 && linea_sensor_suelo_4 == 0 && linea_sensor_suelo_5 == 0 && linea_sensor_suelo_6 == 0){
+
+    contador_seguridad_siguelineas ++;
+
+    if(contador_seguridad_siguelineas >= 20){
+      
+      if (posicion_memoria == 0){
+        posicion_memoria = 20;
+      }
+      
+      else{
+        posicion_memoria--;
+      }
+
+      if(memoria_siguelineas[posicion_memoria]==1){
+
+        cambiar_luces_marcha_alante(LOW);
+        cambiar_luces_marcha_atras(HIGH);
+        cambiar_luces_intermitente_DER(LOW);
+
+        if (contador_intermitente_IZQ == 50){
+
+          cambiar_luces_intermitente_IZQ(CHANGE);
+          contador_intermitente_IZQ = 0;
+      
+        }
+
+        direccion_actual = giro_1;
+    
+        if(velocidad_actual > 100){
+
+        cambiar_luces_frenado(HIGH);
+        velocidad_actual --;
+        movimiento_atras(direccion_actual,velocidad_actual);
+       
+      }
+
+      else if(velocidad_actual < 100){
+
+        cambiar_luces_frenado(LOW);
+        velocidad_actual ++;
+        movimiento_atras(direccion_actual,velocidad_actual);
+      }
+       
+      else{
+
+        cambiar_luces_frenado(LOW);
+        movimiento_atras(direccion_actual,velocidad_actual);
+      
+        }
+
+      contador_intermitente_IZQ ++;
+
+    }
+  
+      else if(memoria_siguelineas[posicion_memoria]==2){
+
+        cambiar_luces_marcha_alante(LOW);
+        cambiar_luces_marcha_atras(HIGH);
+        cambiar_luces_intermitente_DER(LOW);
+
+        if (contador_intermitente_IZQ == 50){
+
+          cambiar_luces_intermitente_IZQ(CHANGE);
+          contador_intermitente_IZQ = 0;
+      
+        }
+
+        direccion_actual = giro_2;
+    
+        if(velocidad_actual > 150){
+
+          cambiar_luces_frenado(HIGH);
+          velocidad_actual --;
+          movimiento_atras(direccion_actual,velocidad_actual);
+       
+        }
+
+        else if(velocidad_actual < 150){
+
+          cambiar_luces_frenado(LOW);
+          velocidad_actual ++;
+          movimiento_atras(direccion_actual,velocidad_actual);
+        }
+       
+        else{
+
+          cambiar_luces_frenado(LOW);
+          movimiento_atras(direccion_actual,velocidad_actual);
+      
+        }
+
+        contador_intermitente_IZQ ++;
+
+      }
+
+      else if(memoria_siguelineas[posicion_memoria]==3){
+
+        cambiar_luces_marcha_alante(LOW);
+        cambiar_luces_marcha_atras(HIGH);
+        cambiar_luces_intermitente_DER(LOW);
+        cambiar_luces_intermitente_IZQ(LOW);
+
+    direccion_actual = giro_3;
+    
+    if(velocidad_actual > 200){
+
+       cambiar_luces_frenado(HIGH);
+       velocidad_actual --;
+       movimiento_atras(direccion_actual,velocidad_actual);
+       
+    }
+
+    else if(velocidad_actual < 200){
+
+      cambiar_luces_frenado(LOW);
+      velocidad_actual ++;
+      movimiento_atras(direccion_actual,velocidad_actual);
+    }
+       
+    else{
+
+      cambiar_luces_frenado(LOW);
+      movimiento_atras(direccion_actual,velocidad_actual);
+      
+    }
+    
+  }  
+
+      else if(memoria_siguelineas[posicion_memoria]==4){
+
+        cambiar_luces_marcha_alante(LOW);
+        cambiar_luces_marcha_atras(HIGH);
+        cambiar_luces_intermitente_DER(LOW);
+        cambiar_luces_intermitente_IZQ(LOW);
+        cambiar_luces_frenado(LOW);
+
+        direccion_actual = giro_4;
+
+        if(velocidad_actual < 255){
+
+          velocidad_actual ++;
+          movimiento_atras(direccion_actual,velocidad_actual);
+        }
+       
+        else{
+
+          cambiar_luces_frenado(LOW);
+          movimiento_atras(direccion_actual,velocidad_actual);
+      
+        }
+      }
+
+      else if(memoria_siguelineas[posicion_memoria]==5){
+
+        cambiar_luces_marcha_alante(LOW);
+        cambiar_luces_marcha_atras(HIGH);
+        cambiar_luces_intermitente_DER(LOW);
+        cambiar_luces_intermitente_IZQ(LOW);
+
+
+        direccion_actual = giro_5;
+    
+        if(velocidad_actual > 200){
+
+          cambiar_luces_frenado(HIGH);
+          velocidad_actual --;
+          movimiento_atras(direccion_actual,velocidad_actual);
+       
+        }
+
+        else if(velocidad_actual < 200){
+
+          cambiar_luces_frenado(LOW);
+          velocidad_actual ++;
+          movimiento_atras(direccion_actual,velocidad_actual);
+          
+        }
+       
+        else{
+
+          cambiar_luces_frenado(LOW);
+          movimiento_atras(direccion_actual,velocidad_actual);
+      
+        }
+      }
+
+      else if(memoria_siguelineas[posicion_memoria]==6){
+
+        cambiar_luces_marcha_alante(HIGH);
+        cambiar_luces_marcha_atras(LOW);
+        cambiar_luces_intermitente_IZQ(LOW);
+
+        if (contador_intermitente_DER == 50){
+
+          cambiar_luces_intermitente_DER(CHANGE);
+          contador_intermitente_DER = 0;
+      
+        }
+
+        direccion_actual = giro_6;
+    
+        if(velocidad_actual > 150){
+
+          cambiar_luces_frenado(HIGH);
+          velocidad_actual --;
+          movimiento_atras(direccion_actual,velocidad_actual);
+       
+        }
+
+        else if(velocidad_actual < 150){
+
+          cambiar_luces_frenado(LOW);
+          velocidad_actual ++;
+          movimiento_atras(direccion_actual,velocidad_actual);
+        }
+       
+        else{
+
+          cambiar_luces_frenado(LOW);
+          movimiento_atras(direccion_actual,velocidad_actual);
+      
+        }
+
+        contador_intermitente_DER ++;
+        
+      }
+
+      else if(memoria_siguelineas[posicion_memoria]==7){
+
+        cambiar_luces_marcha_alante(LOW);
+        cambiar_luces_marcha_atras(HIGH);
+        cambiar_luces_intermitente_IZQ(LOW);
+
+        if (contador_intermitente_DER == 50){
+
+          cambiar_luces_intermitente_DER(CHANGE);
+          contador_intermitente_DER = 0;
+      
+        }
+
+        direccion_actual = giro_7;
+    
+        if(velocidad_actual > 100){
+
+          cambiar_luces_frenado(HIGH);
+          velocidad_actual --;
+          movimiento_atras(direccion_actual,velocidad_actual);
+       
+        }
+
+        else if(velocidad_actual < 100){
+
+          cambiar_luces_frenado(LOW);
+          velocidad_actual ++;
+          movimiento_atras(direccion_actual,velocidad_actual);
+          
+        }
+       
+        else{
+
+          cambiar_luces_frenado(LOW);
+          movimiento_atras(direccion_actual,velocidad_actual);
+      
+        }
+
+        contador_intermitente_DER ++;
+          
+      }
+    }
+  }
+  
+
+  else if(linea_sensor_suelo_1 == 1 && linea_sensor_suelo_2 == 0 && linea_sensor_suelo_3 == 0 && linea_sensor_suelo_4 == 0 && linea_sensor_suelo_5 == 0 && linea_sensor_suelo_6 == 0){
+
+    cambiar_luces_marcha_alante(HIGH);
+    cambiar_luces_marcha_atras(LOW);
+    cambiar_luces_intermitente_DER(LOW);
+
+    if (contador_intermitente_IZQ == 50){
+
+      cambiar_luces_intermitente_IZQ(CHANGE);
+      contador_intermitente_IZQ = 0;
+      
+    }
+
+    direccion_actual = giro_1;
+    
+    if(velocidad_actual > 100){
+
+       cambiar_luces_frenado(HIGH);
+       velocidad_actual --;
+       movimiento_adelante(direccion_actual,velocidad_actual);
+       
+    }
+
+    else if(velocidad_actual < 100){
+
+      cambiar_luces_frenado(LOW);
+      velocidad_actual ++;
+      movimiento_adelante(direccion_actual,velocidad_actual);
+      
+    }
+       
+    else{
+
+      cambiar_luces_frenado(LOW);
+      movimiento_adelante(direccion_actual,velocidad_actual);
+      
+    }
+
+    contador_intermitente_IZQ ++;
+    memoria_siguelineas[posicion_memoria] = 1;
+    posicion_memoria ++;
+    
+  }
+
+  else if(linea_sensor_suelo_1 == 1 && linea_sensor_suelo_2 == 1 && linea_sensor_suelo_3 == 0 && linea_sensor_suelo_4 == 0 && linea_sensor_suelo_5 == 0 && linea_sensor_suelo_6 == 0){
+
+    cambiar_luces_marcha_alante(HIGH);
+    cambiar_luces_marcha_atras(LOW);
+    cambiar_luces_intermitente_DER(LOW);
+
+    if (contador_intermitente_IZQ == 50){
+
+      cambiar_luces_intermitente_IZQ(CHANGE);
+      contador_intermitente_IZQ = 0;
+      
+    }
+
+    direccion_actual = giro_2;
+    
+    if(velocidad_actual > 150){
+
+       cambiar_luces_frenado(HIGH);
+       velocidad_actual --;
+       movimiento_adelante(direccion_actual,velocidad_actual);
+       
+    }
+
+    else if(velocidad_actual < 150){
+
+      cambiar_luces_frenado(LOW);
+      velocidad_actual ++;
+      movimiento_adelante(direccion_actual,velocidad_actual);
+      
+    }
+       
+    else{
+
+      cambiar_luces_frenado(LOW);
+      movimiento_adelante(direccion_actual,velocidad_actual);
+      
+    }
+
+    contador_intermitente_IZQ ++;
+    memoria_siguelineas[posicion_memoria] = 2;
+    posicion_memoria ++;
+    
+    if(contador_seguridad_siguelineas  > 0){
+      contador_seguridad_siguelineas --;
+    }
+    
+  }
+  
+  else if(linea_sensor_suelo_1 == 0 && linea_sensor_suelo_2 == 1 && linea_sensor_suelo_3 == 1 && linea_sensor_suelo_4 == 0 && linea_sensor_suelo_5 == 0 && linea_sensor_suelo_6 == 0){
+
+    cambiar_luces_marcha_alante(HIGH);
+    cambiar_luces_marcha_atras(LOW);
+    cambiar_luces_intermitente_DER(LOW);
+    cambiar_luces_intermitente_IZQ(LOW);
+
+
+    direccion_actual = giro_3;
+    
+    if(velocidad_actual > 200){
+
+       cambiar_luces_frenado(HIGH);
+       velocidad_actual --;
+       movimiento_adelante(direccion_actual,velocidad_actual);
+       
+    }
+
+    else if(velocidad_actual < 200){
+
+      cambiar_luces_frenado(LOW);
+      velocidad_actual ++;
+      movimiento_adelante(direccion_actual,velocidad_actual);
+    }
+       
+    else{
+
+      cambiar_luces_frenado(LOW);
+      movimiento_adelante(direccion_actual,velocidad_actual);
+      
+    }
+
+    memoria_siguelineas[posicion_memoria] = 3;
+    posicion_memoria ++;
+    
+    if(contador_seguridad_siguelineas  > 0){
+      contador_seguridad_siguelineas --;
+    }
+    
+  }
+
+  else if(linea_sensor_suelo_1 == 0 && linea_sensor_suelo_2 == 0 && linea_sensor_suelo_3 == 1 && linea_sensor_suelo_4 == 1 && linea_sensor_suelo_5 == 0 && linea_sensor_suelo_6 == 0){
+
+    cambiar_luces_marcha_alante(HIGH);
+    cambiar_luces_marcha_atras(LOW);
+    cambiar_luces_intermitente_DER(LOW);
+    cambiar_luces_intermitente_IZQ(LOW);
+    cambiar_luces_frenado(LOW);
+
+    direccion_actual = giro_4;
+
+    if(velocidad_actual < 255){
+
+      velocidad_actual ++;
+      movimiento_adelante(direccion_actual,velocidad_actual);
+    }
+       
+    else{
+
+      cambiar_luces_frenado(LOW);
+      movimiento_adelante(direccion_actual,velocidad_actual);
+      
+    }
+
+    memoria_siguelineas[posicion_memoria] = 4;
+    posicion_memoria ++;
+    
+    if(contador_seguridad_siguelineas  > 0){
+      contador_seguridad_siguelineas --;
+    }
+    
+  }
+
+  else if(linea_sensor_suelo_1 == 0 && linea_sensor_suelo_2 == 0 && linea_sensor_suelo_3 == 0 && linea_sensor_suelo_4 == 1 && linea_sensor_suelo_5 == 1 && linea_sensor_suelo_6 == 0){
+
+    cambiar_luces_marcha_alante(HIGH);
+    cambiar_luces_marcha_atras(LOW);
+    cambiar_luces_intermitente_DER(LOW);
+    cambiar_luces_intermitente_IZQ(LOW);
+
+
+    direccion_actual = giro_5;
+    
+    if(velocidad_actual > 200){
+
+       cambiar_luces_frenado(HIGH);
+       velocidad_actual --;
+       movimiento_adelante(direccion_actual,velocidad_actual);
+       
+    }
+
+    else if(velocidad_actual < 200){
+
+      cambiar_luces_frenado(LOW);
+      velocidad_actual ++;
+      movimiento_adelante(direccion_actual,velocidad_actual);
+    }
+       
+    else{
+
+      cambiar_luces_frenado(LOW);
+      movimiento_adelante(direccion_actual,velocidad_actual);
+      
+    }
+
+    memoria_siguelineas[posicion_memoria] = 5;
+    posicion_memoria ++;
+
+    if(contador_seguridad_siguelineas  > 0){
+      contador_seguridad_siguelineas --;
+    }
+    
+  }
+
+  else if(linea_sensor_suelo_1 == 0 && linea_sensor_suelo_2 == 0 && linea_sensor_suelo_3 == 0 && linea_sensor_suelo_4 == 0 && linea_sensor_suelo_5 == 1 && linea_sensor_suelo_6 == 1){
+
+    cambiar_luces_marcha_alante(HIGH);
+    cambiar_luces_marcha_atras(LOW);
+    cambiar_luces_intermitente_IZQ(LOW);
+
+    if (contador_intermitente_DER == 50){
+
+      cambiar_luces_intermitente_DER(CHANGE);
+      contador_intermitente_DER = 0;
+      
+    }
+
+    direccion_actual = giro_6;
+    
+    if(velocidad_actual > 150){
+
+       cambiar_luces_frenado(HIGH);
+       velocidad_actual --;
+       movimiento_adelante(direccion_actual,velocidad_actual);
+       
+    }
+
+    else if(velocidad_actual < 150){
+
+      cambiar_luces_frenado(LOW);
+      velocidad_actual ++;
+      movimiento_adelante(direccion_actual,velocidad_actual);
+    }
+       
+    else{
+
+      cambiar_luces_frenado(LOW);
+      movimiento_adelante(direccion_actual,velocidad_actual);
+      
+    }
+
+    contador_intermitente_DER ++;
+    memoria_siguelineas[posicion_memoria] = 6;
+    posicion_memoria ++;
+
+    if(contador_seguridad_siguelineas  > 0){
+      contador_seguridad_siguelineas --;
+    }
+    
+    
+  }
+
+  else if(linea_sensor_suelo_1 == 0 && linea_sensor_suelo_2 == 0 && linea_sensor_suelo_3 == 0 && linea_sensor_suelo_4 == 0 && linea_sensor_suelo_5 == 0 && linea_sensor_suelo_6 == 1){
+
+    cambiar_luces_marcha_alante(HIGH);
+    cambiar_luces_marcha_atras(LOW);
+    cambiar_luces_intermitente_IZQ(LOW);
+
+    if (contador_intermitente_DER == 50){
+      cambiar_luces_intermitente_DER(CHANGE);
+      contador_intermitente_DER = 0;
+      
+    }
+
+    direccion_actual = giro_7;
+    
+    if(velocidad_actual > 100){
+
+       cambiar_luces_frenado(HIGH);
+       velocidad_actual --;
+       movimiento_adelante(direccion_actual,velocidad_actual);
+       
+    }
+
+    else if(velocidad_actual < 100){
+
+      cambiar_luces_frenado(LOW);
+      velocidad_actual ++;
+      movimiento_adelante(direccion_actual,velocidad_actual);
+    }
+       
+    else{
+
+      cambiar_luces_frenado(LOW);
+      movimiento_adelante(direccion_actual,velocidad_actual);
+      
+    }
+
+    contador_intermitente_DER ++;
+    memoria_siguelineas[posicion_memoria] = 7;
+    posicion_memoria ++;
+
+    if(contador_seguridad_siguelineas  > 0){
+      contador_seguridad_siguelineas --;
+    }
+    
+  }
+
+  else{
+
+    movimiento_adelante(direccion_actual,velocidad_actual);
+    memoria_siguelineas[posicion_memoria] = memoria_siguelineas[posicion_memoria - 1];
+    posicion_memoria ++;
+    
+  }
+
+}
+
+/*
+ * 3.
+ * Modo teledirigido.
+ */
+
+ void modo_teledirigido(){
+ 
+  if (posicion_joystick_Y <= 149){
+
+    velocidad_anterior = velocidad_actual;
+    velocidad_actual = map(posicion_joystick_Y, 149, 0, 1, 255);
+
+    if (estado_luces = HIGH){
+
+      cambiar_luces_marcha_alante(HIGH);
+      cambiar_luces_marcha_atras(LOW);
+
+      if (velocidad_actual < velocidad_anterior){
+
+        cambiar_luces_frenado(LOW);
+        
+      }
+
+      else{
+
+        cambiar_luces_frenado(HIGH);
+        
+      }
+      
+    }
+
+    movimiento_adelante(velocidad_actual,direccion_actual);
+    
+  }
+
+  else if (posicion_joystick_Y >= 151){
+
+    velocidad_anterior = velocidad_actual;
+    velocidad_actual = map(posicion_joystick_Y, 151, 300, 1, 255);
+
+    if (estado_luces = HIGH){
+
+      cambiar_luces_marcha_alante(HIGH);
+      cambiar_luces_marcha_atras(HIGH);
+
+      if (velocidad_actual < velocidad_anterior){
+
+        cambiar_luces_frenado(LOW);
+        
+      }
+
+      else{
+
+        cambiar_luces_frenado(HIGH);
+        
+      }
+      
+    }    
+
+    movimiento_atras(velocidad_actual,direccion_actual);
+    
+  }
+
+  else if (posicion_joystick_Y == 150){
+
+    velocidad_anterior = velocidad_actual;
+    velocidad_actual = 0;
+
+    if (estado_luces = HIGH){
+
+      cambiar_luces_marcha_alante(HIGH);
+      cambiar_luces_marcha_atras(LOW);
+
+      if (velocidad_actual < velocidad_anterior){
+
+        cambiar_luces_frenado(LOW);
+        
+      }
+
+      else{
+
+        cambiar_luces_frenado(HIGH);
+        
+      }
+      
+    }
+
+    movimiento_adelante(velocidad_actual,direccion_actual);
+    
+  }
+
+  if (posicion_joystick_X <= 149){
+
+    velocidad_anterior = velocidad_actual;
+    direccion_actual = map(posicion_joystick_X, 149, 0, 0, 60);
+
+    if (estado_luces = HIGH){
+
+      cambiar_luces_intermitente_DER(LOW);
+      
+      if (direccion_actual < 75){
+
+        if (contador_intermitente_IZQ == 50){
+        
+          cambiar_luces_intermitente_IZQ(CHANGE);
+          contador_intermitente_IZQ = 0;
+
+        }
+
+        else{
+
+          contador_intermitente_IZQ ++;
+          
+        }
+        
+      }
+
+    }
+
+  }
+
+  else if (posicion_joystick_X <= 151){
+
+    velocidad_anterior = velocidad_actual;
+    direccion_actual = map(posicion_joystick_X, 151, 300, 91, 120);
+
+    if (estado_luces = HIGH){
+
+      cambiar_luces_intermitente_IZQ(LOW);
+      
+      if (direccion_actual > 105){
+
+        if (contador_intermitente_DER == 50){
+        
+          cambiar_luces_intermitente_DER(CHANGE);
+          contador_intermitente_DER = 0;
+
+        }
+
+        else{
+
+          contador_intermitente_DER ++;
+          
+        }
+        
+      }
+      
+    }
+    
+  }
+
+  else if (posicion_joystick_X == 150){
+
+    velocidad_anterior = velocidad_actual;
+    direccion_actual = 90;
+
+    cambiar_luces_intermitente_DER(LOW);
+    cambiar_luces_intermitente_IZQ(LOW);
+      
+  }
+  
+}
+
+ 
+/*
+ * Funciones basicas definidas:
+ *  1.- Movimiento hacia delante (void movimiento_adelante(byte velocidad, byte giro))
+ *  2.- Movimiento hacia detras (void movimiento_atras(byte velocidad, byte giro))
+ *  3.- Detenerse (void movimiento_detenerse(byte giro))
+ *  4.- Lanzar dato por el bus de expansión (void lanzar_dato_luces)
+ *  5.- Pedir Pulso (void pedir_pulso)
+ *  6.- Encender/Apagar luces marcha alante (salida Q0) (cambiar_luces_marcha_alante(bool estado))
+ *  7.- Encender/Apagar luces marcha atras (salida Q1) (cambiar_luces_marcha_atras(bool estado))
+ *  8.- Encender/Apagar luces izquierda (salida Q2) (cambiar_luces_intermitente_IZQ(bool estado))
+ *  9.- Encender/Apagar luces derecha (salida Q3) (cambiar_luces_intermitente_DER(bool estado))
+ *  10.- Encender/Apagar luces de freno (salida Q4) (cambiar_luces_frenado(bool estado))
+ *  11.- Medir distancia obstaculo frontal(distancia_obstaculo_frontal)
+ *  12.- Recibir dato por el bus de expansión (void recibir_dato_sensor)
+ *  13.- Giro hacia una direccion aleatoria (byte giro_aleatorio())
+ *  14.- Leer los sensores delanteros de obstaculos y guardar sus variables (void leer_sensores_delanteros())
+ *  15.- Luces alarma (void luces_alarma())
+ *  16.- Leer los sensores del suelo y guardar sus variables (void leer_sensores_suelo())
+ */
+
+/*
+ * 1.
+ * Movimiento hacia delante (requiere de 2 parametros VELOCIDAD y GIRO)
+ */
+
+void movimiento_adelante(byte velocidad, byte giro){
+
+  direccion.write(giro);
+  analogWrite(motor_detras,0);
+  analogWrite(motor_adelante,velocidad);
+  
+}
+
+/*
+ * 2.
+ * Movimiento hacia detras (requiere de 2 parametros VELOCIDAD y GIRO)
+ */
+ 
+void movimiento_atras(byte velocidad, byte giro){
+
+  direccion.write(giro);
+  analogWrite(motor_adelante,0);
+  analogWrite(motor_detras,velocidad);
+  
+}
+
+/*
+ * 3.
+ * Detener el coche (requiere de 1 parametro GIRO)
+ */
+ 
+void movimiento_detenerse(byte giro){
+
+  direccion.write(giro);
+  analogWrite(motor_adelante,0);
+  analogWrite(motor_detras,0);
+  
+}
+
+/*
+ * 4.
+ * Lanzar dato por el bus de expansión (requiere de 2 parametros DIRECCION(salida) y ESTADO(Encencdido)
+ */
+
+void lanzar_dato_luces (byte direccion, bool estado){
+
+  byte direccion_binario[3]; // Array para almacenar los bits por separado
+  
+  for (int i = 2; i >= 0; i--) {
+    direccion_binario[i] = (direccion >> i) & 1; // Almacena el bit en la posición actual del array
+  }
+
+  digitalWrite (direccion_POS0,direccion_binario[0]);
+  digitalWrite (direccion_POS1,direccion_binario[1]);
+  digitalWrite (direccion_POS2,direccion_binario[2]);
+  delay(10);
+
+  digitalWrite (estado_salida,estado);
+  delay(10);
+  
+  //Enviar el pulso
+  pedir_pulso(pulso_expansion_salidas);
+
+}
+
+/*
+ * 5.
+ * Pedir pulso (requiere de un parametro DIRECCION DEL PULSO)
+ */
+
+void pedir_pulso (byte direccion_pulso){
+
+  digitalWrite (direccion_pulso,HIGH);
+  delay(10);
+  digitalWrite (direccion_pulso,LOW);
+  delay(10);
+  digitalWrite (direccion_pulso,HIGH);
+
+}
+
+/*
+ *  6.
+ *  Encender/Apagar luces delanteras (requiere de un parametro el ESTADO de las luces (Encendidas/Apagadas))
+ */
+
+void cambiar_luces_marcha_alante (bool estado){
+
+  lanzar_dato_luces(luces_marcha_alante, estado);
+  
+}
+
+/*
+ *  7.
+ *  Encender/Apagar luces traseras (marcha atras) (requiere de un parametro el ESTADO de las luces (Encendidas/Apagadas))
+ */
+
+void cambiar_luces_marcha_atras (bool estado){
+
+  lanzar_dato_luces(luces_marcha_atras, estado);
+  
+}
+
+/*
+ *  8.
+ *  Encender/Apagar luces intermitentes izquierda (requiere de un parametro el ESTADO de las luces (Encendidas/Apagadas))
+ */
+
+void cambiar_luces_intermitente_IZQ (bool estado){
+
+  lanzar_dato_luces(luces_intermitente_IZQ, estado);
+  
+}
+
+/*
+ *  9.
+ *  Encender/Apagar luces intermitentes derecha (requiere de un parametro el ESTADO de las luces (Encendidas/Apagadas))
+ */
+
+void cambiar_luces_intermitente_DER (bool estado){
+
+  lanzar_dato_luces(luces_intermitente_DER, estado);
+  
+}
+
+/*
+ *  10.
+ *  Encender/Apagar luces de frenado (requiere de un parametro el ESTADO de las luces (Encendidas/Apagadas))
+ */
+
+void cambiar_luces_frenado (bool estado){
+
+  lanzar_dato_luces(luces_frenado, estado);
+  
+}
+
+/*
+ * 11. 
+ * Medir distancia obstaculo frontal (no requiere ningun parametro, devuelve la DISTANCIA en valor numerico decimal)
+ */
+
+float distancia_obstaculo_frontal(){
+
+  float tiempo;
+  float distancia;
+  
+  digitalWrite(trigger, LOW);
+  digitalWrite(trigger, HIGH);
+  delayMicroseconds(50);
+  digitalWrite(trigger, LOW);
+  
+  //Medir tiempo que tarda en volver el pulso
+  tiempo = pulseIn(echo,HIGH);
+
+  //Calculo de distancia en cm 
+  //(velocidad del sonido 344 m/s = 34400cm/s = 0.0340 cm/us,
+  //dividimos entre dos para quitarle peso al programa ya que el tiempo que mida sera el de ida y vuelta, asi simplicamos la formula 0.0340/2 = 0.017)
+  //distancia = velocidad del sonido * tiempo / 2(por ser ida y vuelta lo que mide el tiempo
+  
+  distancia = 0.017 * tiempo;
+  
+  return distancia;
+  
+}
+
+/*
+ * 12.
+ * Recibir dato por el bus de expansión (requiere de 1 parametro DIRECCION(entrada))
+ */
+ 
+bool recibir_dato_sensor (byte direccion){
+
+  bool estado;
+  byte direccion_binario[3]; // Array para almacenar los bits por separado
+  
+  for (int i = 2; i >= 0; i--) {
+    direccion_binario[i] = (direccion >> i) & 1; // Almacena el bit en la posición actual del array
+  }
+
+  digitalWrite (direccion_POS0,direccion_binario[0]);
+  digitalWrite (direccion_POS1,direccion_binario[1]);
+  digitalWrite (direccion_POS2,direccion_binario[2]);
+  delay(10);
+
+  estado = digitalRead (dato_entrada);
+  delay(10);
+
+  return estado;
+}
+
+/*
+ * 13.
+ * Giro aleatorio (no requiere parametros de entrada develve el angulo de GIRO)
+ */
+ 
+byte giro_aleatorio(){
+  
+  byte sentido_aleatorio;
+  byte giro = 90;
+  
+  //Giro IZQ 1, Giro DER 2
+  sentido_aleatorio=random(1,2);
+
+  if (sentido_aleatorio == 1){
+    giro = 45;
+  }
+
+  else {
+    giro = 135;
+  }
+
+  return giro;
+  
+}
+
+/*
+ * 14.
+ * Leera los sensores delanteros y almacenara los datos
+ */
+ 
+void leer_sensores_delanteros(){
+  
+  obstaculo_sensor_frontal = distancia_obstaculo_frontal();
+  obstaculo_sensor_lateral_DER = recibir_dato_sensor(sensor_lateral_DER);
+  obstaculo_sensor_lateral_IZQ = recibir_dato_sensor(sensor_lateral_IZQ);
+  
+}
+
+/*
+ * 15.
+ * Luces de alarma que se encederan cuando haya averia o el coche este atascado 1s de delay.
+ */
+
+void luces_alarma(){
+
+  movimiento_detenerse(90);
+  
+  cambiar_luces_marcha_alante(HIGH);
+  cambiar_luces_marcha_atras(HIGH);
+  cambiar_luces_intermitente_IZQ(HIGH);
+  cambiar_luces_intermitente_DER(HIGH);
+  cambiar_luces_frenado(HIGH);
+
+  delay(750);
+
+  cambiar_luces_marcha_alante(LOW);
+  cambiar_luces_marcha_atras(LOW);
+  cambiar_luces_intermitente_IZQ(LOW);
+  cambiar_luces_intermitente_DER(LOW);
+  cambiar_luces_frenado(LOW);
+
+  delay(250);
+}
+
+/*
+ * 16.
+ * Leer sensores del suelo y almacenar los datos
+ */
+
+void leer_sensores_suelo(){
+
+  linea_sensor_suelo_1 = recibir_dato_sensor(sensor_suelo_1);
+  linea_sensor_suelo_2 = recibir_dato_sensor(sensor_suelo_2);
+  linea_sensor_suelo_3 = recibir_dato_sensor(sensor_suelo_3);
+  linea_sensor_suelo_4 = recibir_dato_sensor(sensor_suelo_4);
+  linea_sensor_suelo_5 = recibir_dato_sensor(sensor_suelo_5);
+  linea_sensor_suelo_6 = recibir_dato_sensor(sensor_suelo_6);
+  
+}
